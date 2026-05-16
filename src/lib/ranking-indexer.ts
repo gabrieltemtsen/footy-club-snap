@@ -19,13 +19,14 @@ export async function buildClubRankingSnapshot() {
   const maxPages = Number.parseInt(process.env.SNAPCHAIN_MAX_PAGES ?? "10", 10);
   const pageSize = Number.parseInt(process.env.SNAPCHAIN_PAGE_SIZE ?? "100", 10);
   const { casts, source } = await fetchFootballChannelCasts(maxPages, pageSize);
+  const recentCasts = casts.filter((cast) => isWithinLastDays(cast.mentionedAt, 7));
 
   const clubs = Object.fromEntries(
     footballClubs.map((club) => [
       club.slug,
       {
         club,
-        leaderboard: buildLeaderboardForClub(club.slug, casts),
+        leaderboard: buildLeaderboardForClub(club.slug, recentCasts),
       },
     ]),
   );
@@ -35,7 +36,7 @@ export async function buildClubRankingSnapshot() {
     source: {
       parentUrl: source.parentUrl,
       snapchainBaseUrl: source.snapchainBaseUrl,
-      indexedMessages: casts.length,
+      indexedMessages: recentCasts.length,
     },
     clubs,
   };
@@ -157,6 +158,11 @@ function getRecentMentionBonus(lastMentionedAt: string) {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isWithinLastDays(isoTimestamp: string, days: number) {
+  const ageMs = Date.now() - new Date(isoTimestamp).getTime();
+  return ageMs <= days * 24 * 60 * 60 * 1000;
 }
 
 export function getIndexerInfo() {

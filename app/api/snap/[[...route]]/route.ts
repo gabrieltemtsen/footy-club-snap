@@ -9,6 +9,7 @@ import {
   getClubShareText,
   getFriendlyBanter,
 } from "@/src/lib/club-finder";
+import { fetchPrimarySupporters, getPreferredSupporterHandle } from "@/src/lib/fc-footy";
 import { readRankingSnapshot } from "@/src/lib/ranking-store";
 import { addButtons, createPage, input, stack, text, type ElementNode } from "@/src/lib/snap-ui";
 
@@ -128,15 +129,10 @@ async function buildClubLeaderboardPage(baseUrl: string, clubSlug: string | null
   }
 
   const snapshot = await readRankingSnapshot();
+  const ranking = snapshot?.clubs[club.slug];
 
-  if (!snapshot) {
-    return buildErrorPage(baseUrl, "Rankings are not ready yet. Run the indexer and try again.");
-  }
-
-  const ranking = snapshot.clubs[club.slug];
-
-  if (!ranking) {
-    return buildErrorPage(baseUrl, "No cached ranking exists for that club yet.");
+  if (!ranking || ranking.leaderboard.length === 0) {
+    return buildSupporterFallbackPage(baseUrl, club.name, club.teamId);
   }
 
   const topCasters = ranking.leaderboard.slice(0, 5);
@@ -224,6 +220,99 @@ async function buildClubLeaderboardPage(baseUrl: string, clubSlug: string | null
   ]);
 
   return createPage(elements, ["title", "summary", "leaderboard", "actions"]);
+}
+
+async function buildSupporterFallbackPage(baseUrl: string, clubName: string, teamId: string) {
+  try {
+    const supporters = (await fetchPrimarySupporters(teamId)).slice(0, 5);
+    const cardIds = supporters.map((supporter) => `supporter-${supporter.fid}`);
+    const elements: Record<string, ElementNode> = {
+      title: text(`${clubName} Fans`, "bold"),
+      summary: text(
+        supporters.length
+          ? `Showing primary FC Footy supporters while rankings warm up.`
+          : `No primary FC Footy supporters found right now.`,
+        "regular",
+        "secondary",
+      ),
+      leaderboard: stack(cardIds.length ? cardIds : ["emptyState"]),
+      actions: stack(["shareButton", "backButton"]),
+    };
+
+    for (const supporter of supporters) {
+      const cardId = `supporter-${supporter.fid}`;
+      const labelId = `${cardId}-label`;
+      const statId = `${cardId}-stats`;
+      const buttonsId = `${cardId}-buttons`;
+      const viewId = `${cardId}-view`;
+      const banterId = `${cardId}-banter`;
+      const handle = getPreferredSupporterHandle(supporter);
+
+      elements[labelId] = text(`${handle} · FID ${supporter.fid} · ${clubName} fan`, "regular");
+      elements[statId] = text("Primary supporter fallback", "regular", "secondary");
+      elements[buttonsId] = stack([viewId, banterId], "horizontal");
+      elements[cardId] = stack([labelId, statId, buttonsId]);
+
+      addButtons(elements, [
+        {
+          id: viewId,
+          label: "View Profile",
+          icon: "user",
+          action: {
+            action: "view_profile",
+            params: {
+              fid: supporter.fid,
+            },
+          },
+        },
+        {
+          id: banterId,
+          label: "Banter",
+          icon: "message-circle",
+          action: {
+            action: "compose_cast",
+            params: {
+              text: `${handle} is repping ${clubName}. Friendly football banter only: is the fanbase cooking or coping today?`,
+            },
+          },
+        },
+      ]);
+    }
+
+    if (supporters.length === 0) {
+      elements.emptyState = text("Rankings are warming up and no fallback supporters were found yet.", "regular", "secondary");
+    }
+
+    addButtons(elements, [
+      {
+        id: "shareButton",
+        label: "Share",
+        variant: "primary",
+        icon: "share",
+        action: {
+          action: "compose_cast",
+          params: {
+            text: getClubShareText(clubName),
+            embeds: [`${baseUrl}/api/snap`],
+          },
+        },
+      },
+      {
+        id: "backButton",
+        label: "Back",
+        action: {
+          action: "submit",
+          params: {
+            target: `${baseUrl}/api/snap?action=back`,
+          },
+        },
+      },
+    ]);
+
+    return createPage(elements, ["title", "summary", "leaderboard", "actions"]);
+  } catch {
+    return buildErrorPage(baseUrl, "Rankings are warming up and fallback supporters could not be loaded.");
+  }
 }
 
 function buildErrorPage(baseUrl: string, message: string) {

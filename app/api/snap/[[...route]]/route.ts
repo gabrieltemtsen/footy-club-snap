@@ -3,16 +3,13 @@ import { registerSnapHandler } from "@farcaster/snap-hono";
 import { Hono } from "hono";
 import { handle } from "hono/vercel";
 import {
-  fetchClubs,
-  fetchSupporters,
-  findClubByTeamId,
+  findMatchingClubs,
+  getCasterLabel,
+  getClubBySlug,
+  getClubShareText,
   getFriendlyBanter,
-  getPreferredHandle,
-  getShareText,
-  paginateSupporters,
-  rankClubMatches,
-  type FootyClub,
 } from "@/src/lib/club-finder";
+import { readRankingSnapshot } from "@/src/lib/ranking-store";
 import { addButtons, createPage, input, stack, text, type ElementNode } from "@/src/lib/snap-ui";
 
 const app = new Hono().basePath("/api/snap");
@@ -34,7 +31,7 @@ registerSnapHandler(
     }
 
     if (action === "club") {
-      return buildClubFansPage(baseUrl, url.searchParams.get("club"), url.searchParams.get("page"));
+      return buildClubLeaderboardPage(baseUrl, url.searchParams.get("club"));
     }
 
     return buildHomePage(baseUrl);
@@ -52,16 +49,16 @@ export const POST = handle(app);
 
 function buildHomePage(baseUrl: string) {
   const elements = {
-    title: text("Find Your Club Fans", "bold"),
-    description: text("Search a club and discover Farcaster fans to follow or banter.", "regular", "secondary"),
-    clubInput: input("club", "Club name", "Arsenal, Barca, Man Utd..."),
+    title: text("Find Your Club Casters", "bold"),
+    description: text("Search a club and see who talks about them most in /football.", "regular", "secondary"),
+    clubInput: input("club", "Search club", "Arsenal, Chelsea, Barca..."),
     actions: stack(["searchButton"]),
   };
 
   addButtons(elements, [
     {
       id: "searchButton",
-      label: "Search Club",
+      label: "Search",
       variant: "primary",
       action: {
         action: "submit",
@@ -75,183 +72,158 @@ function buildHomePage(baseUrl: string) {
   return createPage(elements, ["title", "description", "clubInput", "actions"]);
 }
 
-async function buildSearchResultsPage(baseUrl: string, rawClub: string) {
-  try {
-    const clubs = await fetchClubs();
-    const matches = rankClubMatches(clubs, rawClub);
-    const buttonIds = matches.map((club) => `club-${club.teamId}`);
-    const subtitle = matches.length
-      ? `Showing matches for "${rawClub || "popular clubs"}".`
-      : `No confident match for "${rawClub}". Try one of these.`;
+function buildSearchResultsPage(baseUrl: string, rawClub: string) {
+  const matches = findMatchingClubs(rawClub);
+  const buttonIds = matches.map((club) => `club-${club.slug}`);
 
-    const elements: Record<string, ElementNode> = {
-      title: text("Choose a club", "bold"),
-      subtitle: text(subtitle, "regular", "secondary"),
-      clubButtons: stack(buttonIds),
-      footerButtons: stack(["backButton"]),
-    };
+  const elements: Record<string, ElementNode> = {
+    title: text("Choose a club", "bold"),
+    subtitle: text(
+      matches.length
+        ? `Showing matches for "${rawClub || "popular clubs"}".`
+        : `No confident match for "${rawClub}". Try one of these.`,
+      "regular",
+      "secondary",
+    ),
+    clubButtons: stack(buttonIds),
+    footerButtons: stack(["backButton"]),
+  };
 
-    addButtons(elements, [
-      ...matches.map((club, index) => {
-        const variant: "primary" | "secondary" = index === 0 ? "primary" : "secondary";
-        const clubLabel = getClubButtonLabel(club);
+  addButtons(elements, [
+    ...matches.map((club, index) => {
+      const variant: "primary" | "secondary" = index === 0 ? "primary" : "secondary";
 
-        return {
-          id: `club-${club.teamId}`,
-          label: clubLabel,
-          variant,
-          action: {
-            action: "submit",
-            params: {
-              target: `${baseUrl}/api/snap?action=club&club=${encodeURIComponent(club.teamId)}`,
-            },
-          },
-        };
-      }),
-      {
-        id: "backButton",
-        label: "Back",
+      return {
+        id: `club-${club.slug}`,
+        label: club.name,
+        variant,
         action: {
           action: "submit",
           params: {
-            target: `${baseUrl}/api/snap?action=back`,
+            target: `${baseUrl}/api/snap?action=club&club=${club.slug}`,
           },
         },
+      };
+    }),
+    {
+      id: "backButton",
+      label: "Back",
+      action: {
+        action: "submit",
+        params: {
+          target: `${baseUrl}/api/snap?action=back`,
+        },
       },
-    ]);
+    },
+  ]);
 
-    return createPage(elements, ["title", "subtitle", "clubButtons", "footerButtons"]);
-  } catch {
-    return buildErrorPage(baseUrl, "Could not load clubs right now. Try again in a moment.");
-  }
+  return createPage(elements, ["title", "subtitle", "clubButtons", "footerButtons"]);
 }
 
-async function buildClubFansPage(baseUrl: string, teamId: string | null, pageRaw: string | null) {
-  try {
-    const clubs = await fetchClubs();
-    const club = findClubByTeamId(clubs, teamId);
+async function buildClubLeaderboardPage(baseUrl: string, clubSlug: string | null) {
+  const club = getClubBySlug(clubSlug);
 
-    if (!club) {
-      return buildErrorPage(baseUrl, "That club could not be resolved. Go back and search again.");
-    }
+  if (!club) {
+    return buildErrorPage(baseUrl, "That club could not be resolved. Go back and search again.");
+  }
 
-    const allSupporters = await fetchSupporters(club.teamId, true);
-    const { page, totalPages, visibleSupporters } = paginateSupporters(allSupporters, pageRaw);
+  const snapshot = await readRankingSnapshot();
 
-    const supporterCardIds = visibleSupporters.map((supporter) => `fan-card-${supporter.fid}`);
-    const actionRowIds = ["backButton", "shareButton"];
+  if (!snapshot) {
+    return buildErrorPage(baseUrl, "Rankings are not ready yet. Run the indexer and try again.");
+  }
 
-    if (page > 1) {
-      actionRowIds.unshift("prevButton");
-    }
+  const ranking = snapshot.clubs[club.slug];
 
-    if (page < totalPages) {
-      actionRowIds.push("nextButton");
-    }
+  if (!ranking) {
+    return buildErrorPage(baseUrl, "No cached ranking exists for that club yet.");
+  }
 
-    const elements: Record<string, ElementNode> = {
-      title: text(club.name, "bold"),
-      summary: text(`${allSupporters.length} primary supporters found on FC Footy.`, "regular", "secondary"),
-      supportersList: stack(supporterCardIds),
-      pagination: text(`Page ${page} of ${totalPages}`, "regular", "secondary"),
-      actions: stack(actionRowIds),
-    };
+  const topCasters = ranking.leaderboard.slice(0, 5);
+  const cardIds = topCasters.map((caster) => `caster-${caster.fid}`);
+  const elements: Record<string, ElementNode> = {
+    title: text(`Top ${club.name} Casters in /football`, "bold"),
+    summary: text(
+      `${topCasters.length} of ${ranking.leaderboard.length} ranked casters · updated ${formatRelative(snapshot.generatedAt)}`,
+      "regular",
+      "secondary",
+    ),
+    leaderboard: stack(cardIds),
+    actions: stack(["shareButton", "backButton"]),
+  };
 
-    visibleSupporters.forEach((supporter) => {
-      const cardId = `fan-card-${supporter.fid}`;
-      const labelId = `${cardId}-label`;
-      const buttonsId = `${cardId}-buttons`;
-      const viewId = `${cardId}-view`;
-      const banterId = `${cardId}-banter`;
+  for (const caster of topCasters) {
+    const cardId = `caster-${caster.fid}`;
+    const labelId = `${cardId}-label`;
+    const statId = `${cardId}-stats`;
+    const buttonsId = `${cardId}-buttons`;
+    const viewId = `${cardId}-view`;
+    const banterId = `${cardId}-banter`;
+    const handle = caster.username?.trim() || caster.displayName?.trim() || `FID ${caster.fid}`;
 
-      elements[labelId] = text(
-        `${getPreferredHandle(supporter)} · FID ${supporter.fid} · ${club.name} fan`,
-        "regular",
-      );
-      elements[buttonsId] = stack([viewId, banterId], "horizontal");
-      elements[cardId] = stack([labelId, buttonsId]);
-
-      addButtons(elements, [
-        {
-          id: viewId,
-          label: "View Profile",
-          icon: "user",
-          action: {
-            action: "view_profile",
-            params: {
-              fid: supporter.fid,
-            },
-          },
-        },
-        {
-          id: banterId,
-          label: "Banter Cast",
-          icon: "message-circle",
-          action: {
-            action: "compose_cast",
-            params: {
-              text: getFriendlyBanter(club.name, supporter),
-            },
-          },
-        },
-      ]);
-    });
+    elements[labelId] = text(`${handle} · FID ${caster.fid} · ${getCasterLabel(club.name, caster)}`, "regular");
+    elements[statId] = text(`${caster.mentionCount} mentions · score ${caster.score}`, "regular", "secondary");
+    elements[buttonsId] = stack([viewId, banterId], "horizontal");
+    elements[cardId] = stack([labelId, statId, buttonsId]);
 
     addButtons(elements, [
       {
-        id: "backButton",
-        label: "Back",
+        id: viewId,
+        label: "View Profile",
+        icon: "user",
         action: {
-          action: "submit",
+          action: "view_profile",
           params: {
-            target: `${baseUrl}/api/snap?action=back`,
+            fid: caster.fid,
           },
         },
       },
       {
-        id: "shareButton",
-        label: "Share",
-        icon: "share",
+        id: banterId,
+        label: "Banter",
+        icon: "message-circle",
         action: {
           action: "compose_cast",
           params: {
-            text: getShareText(club.name),
-            embeds: [`${baseUrl}/api/snap`],
-          },
-        },
-      },
-      {
-        id: "prevButton",
-        label: "Prev",
-        action: {
-          action: "submit",
-          params: {
-            target: `${baseUrl}/api/snap?action=club&club=${encodeURIComponent(club.teamId)}&page=${page - 1}`,
-          },
-        },
-      },
-      {
-        id: "nextButton",
-        label: "Next",
-        variant: "primary",
-        action: {
-          action: "submit",
-          params: {
-            target: `${baseUrl}/api/snap?action=club&club=${encodeURIComponent(club.teamId)}&page=${page + 1}`,
+            text: getFriendlyBanter(club.name, caster),
           },
         },
       },
     ]);
-
-    if (visibleSupporters.length === 0) {
-      elements.supportersList = stack(["emptyState"]);
-      elements.emptyState = text("No primary Farcaster supporters found for this club yet.", "regular", "secondary");
-    }
-
-    return createPage(elements, ["title", "summary", "supportersList", "pagination", "actions"]);
-  } catch {
-    return buildErrorPage(baseUrl, "Could not load supporters right now. Try again in a moment.");
   }
+
+  if (topCasters.length === 0) {
+    elements.leaderboard = stack(["emptyState"]);
+    elements.emptyState = text("No ranked casters found for this club yet.", "regular", "secondary");
+  }
+
+  addButtons(elements, [
+    {
+      id: "shareButton",
+      label: "Share Ranking",
+      variant: "primary",
+      icon: "share",
+      action: {
+        action: "compose_cast",
+        params: {
+          text: getClubShareText(club.name),
+          embeds: [`${baseUrl}/api/snap`],
+        },
+      },
+    },
+    {
+      id: "backButton",
+      label: "Back",
+      action: {
+        action: "submit",
+        params: {
+          target: `${baseUrl}/api/snap?action=back`,
+        },
+      },
+    },
+  ]);
+
+  return createPage(elements, ["title", "summary", "leaderboard", "actions"]);
 }
 
 function buildErrorPage(baseUrl: string, message: string) {
@@ -277,14 +249,6 @@ function buildErrorPage(baseUrl: string, message: string) {
   return createPage(elements, ["title", "message", "actions"]);
 }
 
-function getClubButtonLabel(club: FootyClub) {
-  if (club.leagueName) {
-    return `${club.name} · ${club.leagueName}`;
-  }
-
-  return club.name;
-}
-
 function readClubInput(inputs: unknown): string {
   if (!inputs || typeof inputs !== "object") {
     return "";
@@ -301,14 +265,22 @@ function getBaseUrl(requestUrl: string) {
     return configuredBaseUrl.replace(/\/+$/, "");
   }
 
-  const origin = new URL(requestUrl).origin;
-  const isLocalhost =
-    origin.startsWith("http://localhost") ||
-    origin.startsWith("http://127.0.0.1") ||
-    origin.startsWith("http://[::1]") ||
-    origin.startsWith("https://localhost") ||
-    origin.startsWith("https://127.0.0.1") ||
-    origin.startsWith("https://[::1]");
+  return new URL(requestUrl).origin.replace(/\/+$/, "");
+}
 
-  return isLocalhost ? origin : origin.replace(/\/+$/, "");
+function formatRelative(isoTimestamp: string) {
+  const ageMs = Date.now() - new Date(isoTimestamp).getTime();
+  const ageMinutes = Math.max(1, Math.round(ageMs / (1000 * 60)));
+
+  if (ageMinutes < 60) {
+    return `${ageMinutes}m ago`;
+  }
+
+  const ageHours = Math.round(ageMinutes / 60);
+
+  if (ageHours < 24) {
+    return `${ageHours}h ago`;
+  }
+
+  return `${Math.round(ageHours / 24)}d ago`;
 }

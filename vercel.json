@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/index-football-rankings",
+      "schedule": "*/10 * * * *"
+    }
+  ]
+}

@@ -12,6 +12,7 @@
   "dependencies": {
     "@farcaster/snap": "latest",
     "@farcaster/snap-hono": "latest",
+    "@upstash/redis": "^1.38.0",
     "hono": "latest",
     "next": "latest",
     "react": "latest",

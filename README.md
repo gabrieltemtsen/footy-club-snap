@@ -1,8 +1,13 @@
 # Club Finder
 
-Club Finder is a Farcaster Snap for football fans. It lets someone search for a club, choose a matching team, and browse a compact list of primary Farcaster supporters from the live FC Footy fanclub API.
+Club Finder is a Farcaster Snap that ranks the loudest football casters in the `/football` channel instead of showing a static supporter list.
 
-The Snap endpoint lives at `app/api/snap/[[...route]]/route.ts` and returns Farcaster Snap v2 JSON, not HTML.
+The product has two parts:
+
+1. A small ranking indexer that fetches recent `/football` casts from Snapchain, matches club aliases, computes scores, and stores a cached snapshot.
+2. A feed-friendly Snap UI that reads the cached snapshot and shows the top casters for a searched club.
+
+The Snap endpoint lives at `app/api/snap/[[...route]]/route.ts` and returns Farcaster Snap v2 JSON.
 
 ## Stack
 
@@ -10,35 +15,80 @@ The Snap endpoint lives at `app/api/snap/[[...route]]/route.ts` and returns Farc
 - Hono
 - `@farcaster/snap`
 - `@farcaster/snap-hono`
+- Snapchain HTTP API
+- Upstash Redis or a local `/tmp` snapshot fallback
 - TypeScript
 
-## Features
+## Data Source
 
-- `GET /api/snap` renders the home page with a club input and `Search Club` button.
-- `POST /api/snap?action=search` reads `inputs.club`, resolves against the FC Footy clubs catalog, and shows matching club buttons.
-- `POST /api/snap?action=club&club=<teamId>` shows primary supporters for the selected FC Footy `teamId`.
-- Uses button `submit` targets for server round-trips.
-- Uses Farcaster client actions for:
-  - `view_profile`
-  - `compose_cast`
-- Includes pagination for supporter lists.
-- Includes `Back`, `Share`, and playful `Banter` actions.
-- Uses `https://fc-footy.vercel.app/api/fanclubs/clubs` as the source of truth for club resolution.
-- Uses `https://fc-footy.vercel.app/api/fanclubs/supporters?teamId=<teamId>&primaryOnly=true` for club supporters.
+Snapchain node:
 
-## Project Structure
+- `http://153.75.248.217:3381/v1/`
+
+Football channel parent URL:
+
+- `https://farcaster.xyz/~/channel/football`
+
+Indexer fetch:
+
+- `GET /v1/castsByParent?url=<encoded football channel url>&pageSize=100&reverse=true`
+
+## Ranking Model
+
+The indexer:
+
+1. Fetches recent `/football` channel casts from Snapchain.
+2. Reads each cast text.
+3. Matches club aliases.
+4. Counts mentions per FID per club.
+5. Tracks unique days mentioned, last mention timestamp, and sample casts.
+6. Stores a ranking snapshot.
+
+Score formula:
 
 ```text
-app/
-  api/snap/[[...route]]/route.ts
-  globals.css
-  layout.tsx
-  page.tsx
-src/
-  lib/club-finder.ts
-  lib/fc-footy.ts
-  lib/snap-ui.ts
+score = mentionCount * 3 + uniqueDaysMentioned * 2 + recentMentionBonus
 ```
+
+Recent mention bonus:
+
+- Mentioned within 1 day: `+5`
+- Mentioned within 3 days: `+3`
+- Mentioned within 7 days: `+1`
+
+## Club Aliases
+
+Supported clubs are defined in `src/data/clubs.ts`.
+
+- Arsenal
+- Chelsea
+- Manchester United
+- Liverpool
+- Manchester City
+- Tottenham
+- Barcelona
+- Real Madrid
+
+## Snap Flow
+
+- `GET /api/snap` shows the home page with a club search input.
+- `POST /api/snap?action=search` resolves natural-language club text against local aliases.
+- `POST /api/snap?action=club&club=<slug>` shows the top 5 ranked `/football` casters for that club from the cached snapshot.
+- `GET /api/index-football-rankings` or `POST /api/index-football-rankings` rebuilds and stores the snapshot.
+
+## Storage
+
+Preferred production store:
+
+- Upstash Redis using:
+  - `UPSTASH_REDIS_REST_URL`
+  - `UPSTASH_REDIS_REST_TOKEN`
+
+Fallback for local development:
+
+- `/tmp/club-finder-football-rankings.json`
+
+The Snap reads only the cached snapshot. It does not fetch and rank the whole channel on every user request.
 
 ## Setup
 
@@ -48,82 +98,65 @@ src/
    npm install
    ```
 
-2. Copy the environment file:
+2. Copy environment variables:
 
    ```bash
    cp .env.example .env.local
    ```
 
-3. Update `SNAP_PUBLIC_BASE_URL`:
-   - Local dev: leave it unset if you are using `localhost`.
-   - Deployments: set it to your production origin with no trailing slash.
+3. Set `SNAP_PUBLIC_BASE_URL` to your production origin.
 
-4. For local-only testing, enable signature bypass:
+4. For local Snap testing only:
 
    ```bash
    SKIP_JFS_VERIFICATION=1 npm run dev
    ```
 
-## Local Testing
-
-- Start the app:
-
-  ```bash
-  SKIP_JFS_VERIFICATION=1 npm run dev
-  ```
-
-- Snap URL in local dev:
-
-  ```text
-  http://localhost:3000/api/snap
-  ```
-
-- Recommended test flow:
-  - Open the Farcaster emulator and paste `http://localhost:3000/api/snap`
-  - Search for `Arsenal`, `Chelsea`, `Liverpool`, or `Man Utd`
-  - Tap club buttons to open the primary supporter list
-  - For clubs with large followings, verify pagination works
-
-## Deploy
-
-Deploy to any Node-compatible HTTPS host. Vercel is the straightforward choice for this Next.js + Hono setup.
-
-Set:
+## Environment
 
 ```env
 SNAP_PUBLIC_BASE_URL=https://your-snap-url.com
 SKIP_JFS_VERIFICATION=0
+CRON_SECRET=your-secret
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+SNAPCHAIN_MAX_PAGES=10
+SNAPCHAIN_PAGE_SIZE=100
 ```
 
-After deploy, verify the Snap response:
+## Indexer Testing
+
+Run the indexer manually:
 
 ```bash
-curl -sS -H 'Accept: application/vnd.farcaster.snap+json' \
-  https://your-snap-url.com/api/snap
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  https://your-snap-url.com/api/index-football-rankings
 ```
 
-You should receive valid Snap JSON with content type `application/vnd.farcaster.snap+json`.
+Expected result:
 
-## Data Source
+- A JSON response with `indexedMessages`, `generatedAt`, and ranked club summaries.
 
-The Snap uses the FC Footy fanclub API directly at request time.
+## Snap Testing
 
-- Clubs: `GET https://fc-footy.vercel.app/api/fanclubs/clubs`
-- Supporters: `GET https://fc-footy.vercel.app/api/fanclubs/supporters?teamId=<teamId>&primaryOnly=true`
+Use the Snap endpoint:
 
-Resolution behavior:
+```text
+https://your-snap-url.com/api/snap
+```
 
-- Natural-language club input is normalized before matching
-- Club `name` is preferred first
-- `abbreviation` is also considered
-- `leagueName` and `leagueId` help break ties when names are ambiguous
-- The resolved `teamId` is the canonical identifier used for supporter lookups
+Recommended checks:
+
+- Search `Arsenal`, `Chelsea`, or `Man Utd`
+- Open a club leaderboard page
+- Confirm the top 5 casters render
+- Use `View Profile`
+- Use `Banter`
+- Use `Share`
 
 ## Notes
 
-- `SNAP_PUBLIC_BASE_URL` is used for production button targets.
-- The FC Footy API is the source of truth for both clubs and supporters.
-- Localhost is allowed during development.
-- `SKIP_JFS_VERIFICATION=1` should only be used locally.
-- The website root page is only a small host landing page; the Snap itself is served from `/api/snap`.
-# footy-club-snap
+- The ranking indexer is the product core; the Snap is the presentation layer.
+- If Snapchain responses do not include usernames, the ranking still works with FIDs.
+- The current parser is defensive because Snapchain message payloads can vary by deployment shape.
+- Vercel cron is configured in `vercel.json` to run every 10 minutes.

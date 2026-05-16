@@ -1,5 +1,7 @@
 import { footballClubs, type ClubDefinition } from "@/src/data/clubs";
 
+const CLUB_PAGE_SIZE = 4;
+
 export type RankedCaster = {
   fid: number;
   username?: string | null;
@@ -95,4 +97,19 @@ export function getCasterLabel(clubName: string, caster: RankedCaster) {
   }
 
   return `${clubName} mentioner`;
+}
+
+export function paginateClubItems<T>(items: T[], pageRaw: string | null) {
+  const requestedPage = Number.parseInt(pageRaw ?? "1", 10);
+  const totalPages = Math.max(1, Math.ceil(items.length / CLUB_PAGE_SIZE));
+  const page = Number.isFinite(requestedPage)
+    ? Math.min(Math.max(requestedPage, 1), totalPages)
+    : 1;
+  const startIndex = (page - 1) * CLUB_PAGE_SIZE;
+
+  return {
+    page,
+    totalPages,
+    visibleItems: items.slice(startIndex, startIndex + CLUB_PAGE_SIZE),
+  };
 }

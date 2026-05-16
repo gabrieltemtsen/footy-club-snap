@@ -8,6 +8,7 @@ import {
   getClubBySlug,
   getClubShareText,
   getFriendlyBanter,
+  paginateClubItems,
 } from "@/src/lib/club-finder";
 import { fetchPrimarySupporters, getPreferredSupporterHandle } from "@/src/lib/fc-footy";
 import { readRankingSnapshot } from "@/src/lib/ranking-store";
@@ -32,7 +33,7 @@ registerSnapHandler(
     }
 
     if (action === "club") {
-      return buildClubLeaderboardPage(baseUrl, url.searchParams.get("club"));
+      return buildClubLeaderboardPage(baseUrl, url.searchParams.get("club"), url.searchParams.get("page"));
     }
 
     return buildHomePage(baseUrl);
@@ -121,7 +122,7 @@ function buildSearchResultsPage(baseUrl: string, rawClub: string) {
   return createPage(elements, ["title", "subtitle", "clubButtons", "footerButtons"]);
 }
 
-async function buildClubLeaderboardPage(baseUrl: string, clubSlug: string | null) {
+async function buildClubLeaderboardPage(baseUrl: string, clubSlug: string | null, pageRaw: string | null) {
   const club = getClubBySlug(clubSlug);
 
   if (!club) {
@@ -132,20 +133,31 @@ async function buildClubLeaderboardPage(baseUrl: string, clubSlug: string | null
   const ranking = snapshot?.clubs[club.slug];
 
   if (!ranking || ranking.leaderboard.length === 0) {
-    return buildSupporterFallbackPage(baseUrl, club.name, club.teamId);
+    return buildSupporterFallbackPage(baseUrl, club.name, club.teamId, club.slug, pageRaw);
   }
 
-  const topCasters = ranking.leaderboard.slice(0, 5);
+  const { page, totalPages, visibleItems } = paginateClubItems(ranking.leaderboard, pageRaw);
+  const topCasters = visibleItems;
   const cardIds = topCasters.map((caster) => `caster-${caster.fid}`);
+  const actionIds = ["shareButton", "backButton"];
+
+  if (page > 1) {
+    actionIds.unshift("prevButton");
+  }
+
+  if (page < totalPages) {
+    actionIds.unshift("nextButton");
+  }
+
   const elements: Record<string, ElementNode> = {
     title: text(`Top ${club.name} Casters in /football`, "bold"),
     summary: text(
-      `${topCasters.length} of ${ranking.leaderboard.length} ranked casters · updated ${formatRelative(snapshot.generatedAt)}`,
+      `${topCasters.length} of ${ranking.leaderboard.length} ranked casters · page ${page}/${totalPages} · updated ${formatRelative(snapshot.generatedAt)}`,
       "regular",
       "secondary",
     ),
     leaderboard: stack(cardIds),
-    actions: stack(["shareButton", "backButton"]),
+    actions: stack(actionIds),
   };
 
   for (const caster of topCasters) {
@@ -195,6 +207,26 @@ async function buildClubLeaderboardPage(baseUrl: string, clubSlug: string | null
 
   addButtons(elements, [
     {
+      id: "nextButton",
+      label: "Next",
+      action: {
+        action: "submit",
+        params: {
+          target: `${baseUrl}/api/snap?action=club&club=${club.slug}&page=${page + 1}`,
+        },
+      },
+    },
+    {
+      id: "prevButton",
+      label: "Prev",
+      action: {
+        action: "submit",
+        params: {
+          target: `${baseUrl}/api/snap?action=club&club=${club.slug}&page=${page - 1}`,
+        },
+      },
+    },
+    {
       id: "shareButton",
       label: "Share Ranking",
       variant: "primary",
@@ -222,21 +254,39 @@ async function buildClubLeaderboardPage(baseUrl: string, clubSlug: string | null
   return createPage(elements, ["title", "summary", "leaderboard", "actions"]);
 }
 
-async function buildSupporterFallbackPage(baseUrl: string, clubName: string, teamId: string) {
+async function buildSupporterFallbackPage(
+  baseUrl: string,
+  clubName: string,
+  teamId: string,
+  clubSlug: string,
+  pageRaw: string | null,
+) {
   try {
-    const supporters = (await fetchPrimarySupporters(teamId)).slice(0, 5);
+    const allSupporters = await fetchPrimarySupporters(teamId);
+    const { page, totalPages, visibleItems } = paginateClubItems(allSupporters, pageRaw);
+    const supporters = visibleItems;
     const cardIds = supporters.map((supporter) => `supporter-${supporter.fid}`);
+    const actionIds = ["shareButton", "backButton"];
+
+    if (page > 1) {
+      actionIds.unshift("prevButton");
+    }
+
+    if (page < totalPages) {
+      actionIds.unshift("nextButton");
+    }
+
     const elements: Record<string, ElementNode> = {
       title: text(`${clubName} Fans`, "bold"),
       summary: text(
         supporters.length
-          ? `Showing primary FC Footy supporters while rankings warm up.`
+          ? `Showing primary FC Footy supporters while rankings warm up · page ${page}/${totalPages}.`
           : `No primary FC Footy supporters found right now.`,
         "regular",
         "secondary",
       ),
       leaderboard: stack(cardIds.length ? cardIds : ["emptyState"]),
-      actions: stack(["shareButton", "backButton"]),
+      actions: stack(actionIds),
     };
 
     for (const supporter of supporters) {
@@ -284,6 +334,26 @@ async function buildSupporterFallbackPage(baseUrl: string, clubName: string, tea
     }
 
     addButtons(elements, [
+      {
+        id: "nextButton",
+        label: "Next",
+        action: {
+          action: "submit",
+          params: {
+            target: `${baseUrl}/api/snap?action=club&club=${clubSlug}&page=${page + 1}`,
+          },
+        },
+      },
+      {
+        id: "prevButton",
+        label: "Prev",
+        action: {
+          action: "submit",
+          params: {
+            target: `${baseUrl}/api/snap?action=club&club=${clubSlug}&page=${page - 1}`,
+          },
+        },
+      },
       {
         id: "shareButton",
         label: "Share",

@@ -1,0 +1,26 @@
+{
+  "name": "club-finder-snap",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "mkdir -p .next/types && next typegen && tsc --noEmit"
+  },
+  "dependencies": {
+    "@farcaster/snap": "latest",
+    "@farcaster/snap-hono": "latest",
+    "hono": "latest",
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "typescript": "latest"
+  }
+}

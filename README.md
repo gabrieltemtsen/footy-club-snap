@@ -159,4 +159,21 @@ Recommended checks:
 - The ranking indexer is the product core; the Snap is the presentation layer.
 - If Snapchain responses do not include usernames, the ranking still works with FIDs.
 - The current parser is defensive because Snapchain message payloads can vary by deployment shape.
-- Vercel cron is configured in `vercel.json` to run every 10 minutes.
+- Vercel Hobby cannot run sub-daily cron jobs, so scheduled indexing is handled by GitHub Actions instead.
+
+## Scheduling
+
+This repo uses GitHub Actions to refresh rankings every 15 minutes.
+
+Workflow:
+
+- `.github/workflows/index-football-rankings.yml`
+
+Required GitHub repository secrets:
+
+- `FOOTY_INDEXER_URL`
+  Example: `https://footy-club-snap.vercel.app/api/index-football-rankings`
+- `CRON_SECRET`
+  Must match the `CRON_SECRET` environment variable configured in Vercel
+
+You can also run the workflow manually from the GitHub Actions tab using `workflow_dispatch`.

@@ -1,0 +1,33 @@
+name: Index Football Rankings
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh-rankings:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ranking indexer
+        env:
+          INDEXER_URL: ${{ secrets.FOOTY_INDEXER_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$INDEXER_URL" ]; then
+            echo "FOOTY_INDEXER_URL secret is missing"
+            exit 1
+          fi
+
+          AUTH_HEADER=""
+          if [ -n "$CRON_SECRET" ]; then
+            AUTH_HEADER="Authorization: Bearer $CRON_SECRET"
+          fi
+
+          if [ -n "$AUTH_HEADER" ]; then
+            curl --fail --show-error --silent \
+              -H "$AUTH_HEADER" \
+              "$INDEXER_URL"
+          else
+            curl --fail --show-error --silent "$INDEXER_URL"
+          fi

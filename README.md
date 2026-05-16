@@ -121,3 +121,4 @@ Example:
 - Localhost is allowed during development.
 - `SKIP_JFS_VERIFICATION=1` should only be used locally.
 - The website root page is only a small host landing page; the Snap itself is served from `/api/snap`.
+# footy-club-snap

@@ -1,6 +1,6 @@
 # Club Finder
 
-Club Finder is a Farcaster Snap for football fans. It lets someone search for a club, choose a matching team, and browse a compact list of known supporters from a local Footy dataset.
+Club Finder is a Farcaster Snap for football fans. It lets someone search for a club, choose a matching team, and browse a compact list of primary Farcaster supporters from the live FC Footy fanclub API.
 
 The Snap endpoint lives at `app/api/snap/[[...route]]/route.ts` and returns Farcaster Snap v2 JSON, not HTML.
 
@@ -15,14 +15,16 @@ The Snap endpoint lives at `app/api/snap/[[...route]]/route.ts` and returns Farc
 ## Features
 
 - `GET /api/snap` renders the home page with a club input and `Search Club` button.
-- `POST /api/snap?action=search` reads `inputs.club` and shows matching club buttons from a local list.
-- `POST /api/snap?action=club&club=arsenal` shows club supporters with compact actions.
+- `POST /api/snap?action=search` reads `inputs.club`, resolves against the FC Footy clubs catalog, and shows matching club buttons.
+- `POST /api/snap?action=club&club=<teamId>` shows primary supporters for the selected FC Footy `teamId`.
 - Uses button `submit` targets for server round-trips.
 - Uses Farcaster client actions for:
   - `view_profile`
   - `compose_cast`
 - Includes pagination for supporter lists.
 - Includes `Back`, `Share`, and playful `Banter` actions.
+- Uses `https://fc-footy.vercel.app/api/fanclubs/clubs` as the source of truth for club resolution.
+- Uses `https://fc-footy.vercel.app/api/fanclubs/supporters?teamId=<teamId>&primaryOnly=true` for club supporters.
 
 ## Project Structure
 
@@ -33,8 +35,8 @@ app/
   layout.tsx
   page.tsx
 src/
-  data/supporters.ts
   lib/club-finder.ts
+  lib/fc-footy.ts
   lib/snap-ui.ts
 ```
 
@@ -78,8 +80,9 @@ src/
 
 - Recommended test flow:
   - Open the Farcaster emulator and paste `http://localhost:3000/api/snap`
-  - Search for `Arsenal`, `Barca`, `Chelsea`, or `Man Utd`
-  - Tap club buttons to open the supporter list
+  - Search for `Arsenal`, `Chelsea`, `Liverpool`, or `Man Utd`
+  - Tap club buttons to open the primary supporter list
+  - For clubs with large followings, verify pagination works
 
 ## Deploy
 
@@ -101,23 +104,25 @@ curl -sS -H 'Accept: application/vnd.farcaster.snap+json' \
 
 You should receive valid Snap JSON with content type `application/vnd.farcaster.snap+json`.
 
-## Updating Supporter Data
+## Data Source
 
-Edit `src/data/supporters.ts`.
+The Snap uses the FC Footy fanclub API directly at request time.
 
-- Add or remove clubs in `clubs`
-- Update the local `supporters` array
-- Keep `clubSlug` aligned with the corresponding club entry
+- Clubs: `GET https://fc-footy.vercel.app/api/fanclubs/clubs`
+- Supporters: `GET https://fc-footy.vercel.app/api/fanclubs/supporters?teamId=<teamId>&primaryOnly=true`
 
-Example:
+Resolution behavior:
 
-```ts
-{ fid: 123, username: "gabedev.eth", displayName: "Gabriel", club: "Arsenal", clubSlug: "arsenal" }
-```
+- Natural-language club input is normalized before matching
+- Club `name` is preferred first
+- `abbreviation` is also considered
+- `leagueName` and `leagueId` help break ties when names are ambiguous
+- The resolved `teamId` is the canonical identifier used for supporter lookups
 
 ## Notes
 
 - `SNAP_PUBLIC_BASE_URL` is used for production button targets.
+- The FC Footy API is the source of truth for both clubs and supporters.
 - Localhost is allowed during development.
 - `SKIP_JFS_VERIFICATION=1` should only be used locally.
 - The website root page is only a small host landing page; the Snap itself is served from `/api/snap`.
